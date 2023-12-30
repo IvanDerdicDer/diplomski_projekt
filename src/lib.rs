@@ -1,17 +1,18 @@
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Error, Result};
 use rayon::prelude::*;
-use rust_decimal::Error::{ConversionTo};
+use rust_decimal::Error::ConversionTo;
 use rust_decimal::prelude::*;
 use thiserror::Error;
 
 #[derive(Debug, Eq, PartialEq, Clone)]
 pub struct Column {
     name: String,
-    size: usize,
+    size: u64,
     sql_type: String,
     generator: fn() -> Result<String>,
 }
@@ -19,7 +20,7 @@ pub struct Column {
 impl Column {
     pub fn new(
         name: String,
-        size: usize,
+        size: u64,
         sql_type: String,
         generator: fn() -> Result<String>,
     ) -> Self {
@@ -38,7 +39,7 @@ pub struct Table {
     columns: Vec<Column>,
     delimiter: String,
     percent_size: Decimal,
-    row_size_bytes: usize,
+    row_size_bytes: u64,
 }
 
 impl Table {
@@ -48,7 +49,7 @@ impl Table {
         delimiter: String,
         percent_size: Decimal,
     ) -> Table {
-        let row_size_bytes: usize = columns
+        let row_size_bytes: u64 = columns
             .iter()
             .map(|x| x.size)
             .sum();
@@ -67,13 +68,13 @@ impl Table {
         Ok(buffer.join(&self.delimiter) + "\n")
     }
 
-    pub fn generate_table(&self, file_size_bytes: usize) -> Result<String> {
+    pub fn generate_table(&self, file_size_bytes: u64) -> Result<String> {
         let table_size_bytes = (
-            Decimal::from_usize(file_size_bytes).ok_or(ConversionTo("Failed to convert to usize".into()))?
+            Decimal::from(file_size_bytes)
                 * self.percent_size
         )
-            .to_usize()
-            .ok_or(ConversionTo("Failed to convert to usize".into()))?;
+            .to_u64()
+            .ok_or(ConversionTo("Failed to convert to u64".into()))?;
         let row_count = table_size_bytes / self.row_size_bytes;
 
         (0..row_count)
@@ -87,19 +88,23 @@ impl Table {
 #[derive(Error, Debug)]
 pub enum ExportFileError {
     #[error("Sum of table percentage sizes must be equal 1. It was {sum_percent_size}.")]
-    SumPercentSizeIncorrect { sum_percent_size: Decimal }
+    SumPercentSizeIncorrect { sum_percent_size: Decimal },
+    #[error("Table {table} has a duplicate column {column}.")]
+    DuplicateColumns { table: String, column: String },
+    #[error("Export File contains duplicate table {table}.")]
+    DuplicateTables { table: String },
 }
 
 
 pub struct ExportFile {
     tables: Vec<Table>,
-    file_size_bytes: usize,
+    file_size_bytes: u64,
 }
 
 impl ExportFile {
     pub fn new(
         tables: Vec<Table>,
-        file_size_bytes: usize,
+        file_size_bytes: u64,
     ) -> Result<ExportFile> {
         let sum_percent_size: Decimal = tables.iter()
             .map(|x| x.percent_size)
@@ -124,6 +129,51 @@ impl ExportFile {
         let exported = self.generate_export()?;
         let mut file = File::create(path)?;
         file.write_all(exported.as_ref())?;
+        Ok(())
+    }
+
+
+    pub fn build_schema(&self) -> Result<HashMap<String, HashMap<String, String>>> {
+        let mut schema: HashMap<String, HashMap<String, String>> = HashMap::new();
+
+        for table in self.tables.as_slice() {
+            let mut columns: HashMap<String, String> = HashMap::new();
+
+            for column in table.columns.as_slice() {
+                if columns.contains_key(&column.name) {
+                    return Err(Error::from(ExportFileError::DuplicateColumns {
+                        table: table.id_value.clone(),
+                        column: column.name.clone(),
+                    }));
+                }
+                columns.insert(column.name.clone(), column.sql_type.clone());
+            }
+
+            if schema.contains_key(&table.id_value) {
+                return Err(Error::from(ExportFileError::DuplicateTables {
+                    table: table.id_value.clone()
+                }))
+            }
+
+            schema.insert(table.id_value.clone(), columns);
+        }
+
+        Ok(schema)
+    }
+
+
+    pub fn get_schema_json_str(&self) -> Result<String> {
+        Ok(serde_json::to_string(&self.build_schema()?)?)
+    }
+
+
+    pub fn schema_json(
+        &self,
+        path: &Path
+    ) -> Result<()> {
+        let schema = self.get_schema_json_str()?;
+        let mut file = File::create(path)?;
+        file.write_all(schema.as_ref())?;
         Ok(())
     }
 }
@@ -211,6 +261,38 @@ mod tests {
         let ex = ef.generate_export();
         match ex {
             Ok(_x) => { assert_eq!(1, 1) }
+            Err(_) => {}
+        }
+    }
+
+
+    #[test]
+    fn get_schema_json_str_test() {
+        let c = Column::new(
+            "column".into(),
+            3,
+            "CHAR[3]".into(),
+            simple_generator,
+        );
+
+        let t1 = Table::new(
+            "A".into(),
+            vec![c.clone()],
+            "|".into(),
+            Decimal::from_str("1.0").unwrap(),
+        );
+
+        let ef = ExportFile::new(
+            vec![t1.clone()],
+            1 * 1024 * 1024,
+        ).unwrap();
+
+        let schema = ef.get_schema_json_str();
+
+        match schema {
+            Ok(x) => {
+                assert_eq!(x, r#"{"A":{"column":"CHAR[3]"}}"#);
+            }
             Err(_) => {}
         }
     }
