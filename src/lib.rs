@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::fs;
 use std::fs::File;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use anyhow::{Error, Result};
 use rayon::prelude::*;
@@ -93,19 +94,40 @@ pub enum ExportFileError {
     DuplicateColumns { table: String, column: String },
     #[error("Export File contains duplicate table {table}.")]
     DuplicateTables { table: String },
+    #[error("Too many files to generate {files}")]
+    TooManyFiles { files: u64 },
+    #[error("ReduceFailed")]
+    ReduceFailed,
 }
 
 
 pub struct ExportFile {
     tables: Vec<Table>,
+    number_of_files: u64,
     file_size_bytes: u64,
 }
 
 impl ExportFile {
     pub fn new(
         tables: Vec<Table>,
-        file_size_bytes: u64,
+        data_size_bytes: u64,
+        number_of_files: u64,
     ) -> Result<ExportFile> {
+        if number_of_files >= data_size_bytes {
+            return Err(Error::from(ExportFileError::TooManyFiles { files: number_of_files }));
+        }
+
+        let file_size_bytes = data_size_bytes / number_of_files;
+
+        let is_possible = tables.iter()
+            .map(|x| Decimal::from(file_size_bytes) * x.percent_size >= Decimal::from(x.row_size_bytes))
+            .reduce(|x, y| x && y)
+            .ok_or(Error::from(ExportFileError::ReduceFailed))?;
+
+        if !is_possible {
+            return Err(Error::from(ExportFileError::TooManyFiles { files: number_of_files }));
+        }
+
         let sum_percent_size: Decimal = tables.iter()
             .map(|x| x.percent_size)
             .sum();
@@ -114,7 +136,7 @@ impl ExportFile {
             return Err(Error::from(ExportFileError::SumPercentSizeIncorrect { sum_percent_size }));
         }
 
-        Ok(ExportFile { tables, file_size_bytes })
+        Ok(ExportFile { tables, number_of_files, file_size_bytes })
     }
 
 
@@ -129,6 +151,29 @@ impl ExportFile {
         let exported = self.generate_export()?;
         let mut file = File::create(path)?;
         file.write_all(exported.as_ref())?;
+        Ok(())
+    }
+
+
+    pub fn generate_all_files(&self, folder_path: &Path) -> Result<()> {
+        fs::create_dir_all(folder_path)?;
+
+        (0..self.number_of_files.to_owned()).into_par_iter()
+            .try_for_each(|x| -> Result<()> {
+                let file_path = PathBuf::new()
+                    .join(folder_path)
+                    .join(format!(
+                        "file_{}_{}_{}.txt",
+                        &self.file_size_bytes,
+                        &self.number_of_files,
+                        &x
+                    ));
+
+                self.generate_export_to_file(file_path.as_path())?;
+
+                Ok(())
+            })?;
+
         Ok(())
     }
 
@@ -152,7 +197,7 @@ impl ExportFile {
             if schema.contains_key(&table.id_value) {
                 return Err(Error::from(ExportFileError::DuplicateTables {
                     table: table.id_value.clone()
-                }))
+                }));
             }
 
             schema.insert(table.id_value.clone(), columns);
@@ -169,7 +214,7 @@ impl ExportFile {
 
     pub fn schema_json(
         &self,
-        path: &Path
+        path: &Path,
     ) -> Result<()> {
         let schema = self.get_schema_json_str()?;
         let mut file = File::create(path)?;
@@ -212,6 +257,7 @@ mod tests {
         let ef = ExportFile::new(
             vec![t1.clone(), t2.clone()],
             1 * 1024 * 1024,
+            1,
         );
 
         match ef {
@@ -222,6 +268,7 @@ mod tests {
         let ef = ExportFile::new(
             vec![t1.clone(), t2.clone(), t1.clone()],
             1 * 1024 * 1024,
+            1,
         );
 
         match ef {
@@ -256,6 +303,7 @@ mod tests {
         let ef = ExportFile::new(
             vec![t1.clone(), t2.clone()],
             1 * 1024 * 1024,
+            1,
         ).unwrap();
 
         let ex = ef.generate_export();
@@ -285,6 +333,7 @@ mod tests {
         let ef = ExportFile::new(
             vec![t1.clone()],
             1 * 1024 * 1024,
+            1,
         ).unwrap();
 
         let schema = ef.get_schema_json_str();

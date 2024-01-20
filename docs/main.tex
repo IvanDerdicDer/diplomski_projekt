@@ -40,17 +40,22 @@
 \usepackage{PTSerif} % Use the Paratype Serif font
 \usepackage{fancyhdr}
 \usepackage{hyperref}
+\usepackage{subcaption}
+\usepackage{graphicx}
+\usepackage{listings}
 
 % Turn on the style
 \pagestyle{fancy}
 \fancyhf{}
-\fancyhead[R]{\footnotesize 30.12.2023.}
+\fancyhead[R]{\footnotesize 18.01.2024.}
 % Set the right side of the footer to be the page number
 \fancyfoot[L]{\footnotesize Fer 3 - Diplomski projekt}
 \fancyfoot[C]{\footnotesize FER, 2023}
 \fancyfoot[R]{\footnotesize \thepage}
 
 \renewcommand*\contentsname{Sadržaj}
+\renewcommand*\figurename{Slika}
+\renewcommand*\lstlistingname{Programski kod}
 
 \begin{document}
 
@@ -85,7 +90,7 @@
 	
 	\small Fakultet elektrotehnike i računarstva, Zagreb 
 
-	\small 30.12.2023.\\[\baselineskip]
+	\small 18.01.2024.\\[\baselineskip]
 
 \end{titlepage}
 
@@ -95,7 +100,10 @@
 \clearpage
 \pagenumbering{arabic}
 
-\section{Opis razvijenog proizvoda}{}
+\input{chapters/opis_proizvoda.tex}
 
+\input{chapters/struktura_programa.tex}
+
+\input{chapters/koristenje_biblioteke.tex}
 
 \end{document}
