@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
-use std::io::Write;
+use std::io::{Write};
 use std::path::{Path, PathBuf};
 
 use anyhow::{Error, Result};
@@ -146,6 +146,21 @@ impl ExportFile {
             .try_reduce(|| "".to_string(), |x, y| Ok(x + &y))
     }
 
+
+    pub fn generate_tables(&self) -> HashMap<String, Result<String>> {
+        self.tables.par_iter()
+            .map(|x| {
+                let mut m: HashMap<String, Result<String>> = HashMap::new();
+                m.insert(
+                    x.id_value.clone(),
+                    x.generate_table(self.file_size_bytes),
+                );
+                m
+            })
+            .reduce(|| HashMap::new(), |a, b| {
+                a.into_iter().chain(b).collect()
+            })
+    }
 
     pub fn generate_export_to_file(&self, path: &Path) -> Result<()> {
         let exported = self.generate_export()?;
