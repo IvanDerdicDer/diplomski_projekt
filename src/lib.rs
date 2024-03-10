@@ -68,6 +68,17 @@ impl Table {
 
         Ok(buffer.join(&self.delimiter) + "\n")
     }
+    
+    pub fn generate_table_row_vec(&self) -> Result<Vec<String>> {
+        let mut buffer: Vec<String> = vec![self.id_value.clone()];
+        buffer.append(
+            &mut self.columns.iter()
+                .map(|x| (x.generator)())
+                .collect::<Result<Vec<String>>>()?
+        );
+
+        Ok(buffer)
+    }
 
     pub fn generate_table(&self, file_size_bytes: u64) -> Result<String> {
         let table_size_bytes = (
@@ -82,6 +93,21 @@ impl Table {
             .into_par_iter()
             .map(|_| self.generate_table_row())
             .try_reduce(|| "".to_string(), |x, y| Ok(x + &y))
+    }
+    
+    pub fn generate_table_vec(&self, file_size_bytes: u64) -> Result<Vec<Vec<String>>> {
+        let table_size_bytes = (
+            Decimal::from(file_size_bytes)
+                * self.percent_size
+        )
+            .to_u64()
+            .ok_or(ConversionTo("Failed to convert to u64".into()))?;
+        let row_count = table_size_bytes / self.row_size_bytes;
+
+        (0..row_count)
+            .into_par_iter()
+            .map(|_| self.generate_table_row_vec())
+            .collect()
     }
 }
 
@@ -147,13 +173,13 @@ impl ExportFile {
     }
 
 
-    pub fn generate_tables(&self) -> HashMap<String, Result<String>> {
+    pub fn generate_tables(&self) -> HashMap<String, Result<Vec<Vec<String>>>> {
         self.tables.par_iter()
             .map(|x| {
-                let mut m: HashMap<String, Result<String>> = HashMap::new();
+                let mut m: HashMap<String, Result<Vec<Vec<String>>>> = HashMap::new();
                 m.insert(
                     x.id_value.clone(),
-                    x.generate_table(self.file_size_bytes),
+                    x.generate_table_vec(self.file_size_bytes),
                 );
                 m
             })
