@@ -10,7 +10,7 @@ use rust_decimal::Error::ConversionTo;
 use rust_decimal::prelude::*;
 use thiserror::Error;
 
-#[derive(Debug, Eq, PartialEq, Clone)]
+#[derive(Debug, Clone)]
 pub struct Column {
     name: String,
     size: u64,
@@ -68,7 +68,7 @@ impl Table {
 
         Ok(buffer.join(&self.delimiter) + "\n")
     }
-    
+
     pub fn generate_table_row_vec(&self) -> Result<Vec<String>> {
         let mut buffer: Vec<String> = vec![self.id_value.clone()];
         buffer.append(
@@ -94,7 +94,7 @@ impl Table {
             .map(|_| self.generate_table_row())
             .try_reduce(|| "".to_string(), |x, y| Ok(x + &y))
     }
-    
+
     pub fn generate_table_vec(&self, file_size_bytes: u64) -> Result<Vec<Vec<String>>> {
         let table_size_bytes = (
             Decimal::from(file_size_bytes)
@@ -173,7 +173,7 @@ impl ExportFile {
     }
 
 
-    pub fn generate_tables(&self) -> HashMap<String, Result<Vec<Vec<String>>>> {
+    pub fn generate_raw_tables(&self) -> HashMap<String, Result<Vec<Vec<String>>>> {
         self.tables.par_iter()
             .map(|x| {
                 let mut m: HashMap<String, Result<Vec<Vec<String>>>> = HashMap::new();
@@ -187,6 +187,25 @@ impl ExportFile {
                 a.into_iter().chain(b).collect()
             })
     }
+
+
+    pub fn raw_tables_to_string(tables: HashMap<String, Result<Vec<Vec<String>>>>, delimiter: &str) -> Result<String> {
+        Ok(tables.par_iter()
+            .map(|x|
+                {
+                    x.1.as_ref()
+                        .par_iter()
+                        .map(|y| y.par_iter()
+                            .map(|z| z.join(delimiter))
+                            .reduce(|| "".to_string(), |a, b| a + &b)
+                        )
+                        .reduce(|| "".to_string(), |a, b| a + &b)
+                })
+            .reduce(|| "".to_string(), |a, b| {
+                a + &b
+            }))
+    }
+
 
     pub fn generate_export_to_file(&self, path: &Path) -> Result<()> {
         let exported = self.generate_export()?;
@@ -267,6 +286,7 @@ impl ExportFile {
 
 #[cfg(test)]
 mod tests {
+    use std::result::Result::Ok;
     use super::*;
 
     fn simple_generator() -> Result<String> {
